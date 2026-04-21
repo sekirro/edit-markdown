@@ -180,6 +180,42 @@ body {
 .save-btn:hover:not(:disabled) { background: var(--accent-hover); }
 .save-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
+.sync-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.sync-banner.info {
+  background: rgba(166, 227, 161, 0.12);
+  color: var(--green);
+}
+
+.sync-banner.warning {
+  background: rgba(249, 226, 175, 0.12);
+  color: var(--yellow);
+}
+
+.sync-banner-btn {
+  background: none;
+  border: 1px solid currentColor;
+  color: inherit;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  cursor: pointer;
+  font-family: inherit;
+  white-space: nowrap;
+}
+
+.sync-banner-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
 /* ===== Search Panel ===== */
 .search-panel {
   background: var(--bg-secondary);

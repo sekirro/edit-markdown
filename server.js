@@ -38,6 +38,7 @@ const resolveNotebookPath = (targetPath = '') => {
 
 const getErrorStatus = (error) => error.statusCode || 500;
 const getErrorMessage = (error) => error.message || 'Internal server error';
+const getMtimeMs = (filePath) => Math.trunc(fs.statSync(filePath).mtimeMs);
 
 // 读取目录结构
 app.get('/api/files', (req, res) => {
@@ -182,7 +183,12 @@ app.get('/api/files/{*path}', (req, res) => {
   }
 
   const content = fs.readFileSync(filePath, 'utf-8');
-  res.json({ name: path.basename(filePath), path: getPath(req), content });
+  res.json({
+    name: path.basename(filePath),
+    path: getPath(req),
+    content,
+    mtimeMs: getMtimeMs(filePath),
+  });
 });
 
 // 保存文件
@@ -194,6 +200,28 @@ app.put('/api/files/{*path}', (req, res) => {
     return res.status(getErrorStatus(error)).json({ error: getErrorMessage(error) });
   }
 
+  const { baseMtimeMs } = req.body;
+  const fileExists = fs.existsSync(filePath);
+
+  if (!fileExists && typeof baseMtimeMs === 'number') {
+    return res.status(409).json({
+      error: 'File was removed on disk',
+      exists: false,
+    });
+  }
+
+  if (fileExists && typeof baseMtimeMs === 'number') {
+    const currentMtimeMs = getMtimeMs(filePath);
+    if (currentMtimeMs !== baseMtimeMs) {
+      return res.status(409).json({
+        error: 'File changed on disk',
+        exists: true,
+        content: fs.readFileSync(filePath, 'utf-8'),
+        mtimeMs: currentMtimeMs,
+      });
+    }
+  }
+
   // 确保父目录存在
   const parentDir = path.dirname(filePath);
   if (!fs.existsSync(parentDir)) {
@@ -201,7 +229,11 @@ app.put('/api/files/{*path}', (req, res) => {
   }
 
   fs.writeFileSync(filePath, req.body.content || '', 'utf-8');
-  res.json({ success: true, path: getPath(req) });
+  res.json({
+    success: true,
+    path: getPath(req),
+    mtimeMs: getMtimeMs(filePath),
+  });
 });
 
 // 新建文件或文件夹
