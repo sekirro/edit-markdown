@@ -1,0 +1,321 @@
+import { useState, useEffect, useCallback, useRef } from 'react';
+import Sidebar from './components/Sidebar';
+import Editor from './components/Editor';
+import Preview from './components/Preview';
+import Search from './components/Search';
+
+interface FileNode {
+  name: string;
+  path: string;
+  isDirectory: boolean;
+  children?: FileNode[];
+}
+
+type ViewMode = 'edit' | 'preview' | 'split';
+
+const AUTO_SAVE_DELAY = 3000; // 3s idle before auto-save
+
+function App() {
+  const [fileTree, setFileTree] = useState<FileNode[]>([]);
+  const [currentFile, setCurrentFile] = useState<string | null>(null);
+  const [content, setContent] = useState('');
+  const [viewMode, setViewMode] = useState<ViewMode>('split');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(true); // is content synced with disk?
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [autoSave, setAutoSave] = useState(true);
+  const contentRef = useRef(content);
+  const fileRef = useRef(currentFile);
+  const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // keep refs in sync
+  useEffect(() => { contentRef.current = content; }, [content]);
+  useEffect(() => { fileRef.current = currentFile; }, [currentFile]);
+
+  // load file tree
+  const loadTree = useCallback(async () => {
+    try {
+      const res = await fetch('/api/tree');
+      const data = await res.json();
+      setFileTree(data);
+    } catch (e) {
+      console.error('Failed to load file tree:', e);
+    }
+  }, []);
+
+  useEffect(() => { loadTree(); }, [loadTree]);
+
+  // load file content
+  const loadFile = useCallback(async (filePath: string) => {
+    try {
+      const res = await fetch(`/api/files/${filePath}`);
+      if (res.ok) {
+        const data = await res.json();
+        setCurrentFile(data.path);
+        setContent(data.content);
+        setSaved(true);
+      }
+    } catch (e) {
+      console.error('Failed to load file:', e);
+    }
+  }, []);
+
+  // save file
+  const saveFile = useCallback(async () => {
+    const f = fileRef.current;
+    const c = contentRef.current;
+    if (!f) return false;
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/files/${f}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: c }),
+      });
+      if (res.ok) {
+        setSaved(true);
+        await loadTree();
+        return true;
+      }
+    } catch (e) {
+      console.error('Failed to save file:', e);
+      return false;
+    } finally {
+      setSaving(false);
+    }
+    return false;
+  }, [loadTree]);
+
+  const ensureCanLeaveCurrentFile = useCallback(async (nextFilePath: string) => {
+    if (!currentFile || saved || nextFilePath === currentFile) {
+      return true;
+    }
+
+    if (autoSave) {
+      return saveFile();
+    }
+
+    return window.confirm('当前文件有未保存的修改，继续切换将丢失这些修改。是否继续？');
+  }, [autoSave, currentFile, saveFile, saved]);
+
+  const openFile = useCallback(async (filePath: string) => {
+    const canContinue = await ensureCanLeaveCurrentFile(filePath);
+    if (!canContinue) return;
+    await loadFile(filePath);
+  }, [ensureCanLeaveCurrentFile, loadFile]);
+
+  // auto-save timer
+  useEffect(() => {
+    if (!autoSave || !currentFile || saved) {
+      if (autoSaveTimer.current) {
+        clearTimeout(autoSaveTimer.current);
+        autoSaveTimer.current = null;
+      }
+      return;
+    }
+    if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
+    autoSaveTimer.current = setTimeout(() => {
+      saveFile();
+    }, AUTO_SAVE_DELAY);
+    return () => {
+      if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
+    };
+  }, [content, autoSave, currentFile, saved, saveFile]);
+
+  // keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault();
+        saveFile();
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+        e.preventDefault();
+        setSearchOpen(prev => !prev);
+      }
+      if (e.key === 'Escape' && searchOpen) {
+        setSearchOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [saveFile, searchOpen]);
+
+  // warn on unsaved changes
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      if (!saved && currentFile) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [saved, currentFile]);
+
+  // new file
+  const handleNewFile = useCallback(async (name: string, parentPath: string = '') => {
+    const filePath = parentPath ? `${parentPath}/${name}` : name;
+    const canContinue = await ensureCanLeaveCurrentFile(filePath);
+    if (!canContinue) return;
+
+    try {
+      const res = await fetch(`/api/files/${filePath}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isDirectory: false }),
+      });
+      if (res.ok) {
+        await loadTree();
+        await loadFile(filePath);
+      }
+    } catch (e) {
+      console.error('Failed to create file:', e);
+    }
+  }, [ensureCanLeaveCurrentFile, loadTree, loadFile]);
+
+  // new folder
+  const handleNewFolder = useCallback(async (name: string, parentPath: string = '') => {
+    const folderPath = parentPath ? `${parentPath}/${name}` : name;
+    try {
+      const res = await fetch(`/api/files/${folderPath}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isDirectory: true }),
+      });
+      if (res.ok) await loadTree();
+    } catch (e) {
+      console.error('Failed to create folder:', e);
+    }
+  }, [loadTree]);
+
+  // delete
+  const handleDelete = useCallback(async (filePath: string) => {
+    try {
+      const res = await fetch(`/api/files/${filePath}`, { method: 'DELETE' });
+      if (res.ok) {
+        if (currentFile === filePath || currentFile?.startsWith(filePath + '/')) {
+          setCurrentFile(null);
+          setContent('');
+        }
+        await loadTree();
+      }
+    } catch (e) {
+      console.error('Failed to delete:', e);
+    }
+  }, [currentFile, loadTree]);
+
+  // rename
+  const handleRename = useCallback(async (oldPath: string, newName: string) => {
+    try {
+      const res = await fetch(`/api/files/${oldPath}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ newName }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (currentFile === oldPath) setCurrentFile(data.newPath);
+        await loadTree();
+      }
+    } catch (e) {
+      console.error('Failed to rename:', e);
+    }
+  }, [currentFile, loadTree]);
+
+  // word & char count
+  const charCount = content.length;
+  const wordCount = content.trim() ? content.trim().split(/\s+/).length : 0;
+  const lineCount = content ? content.split('\n').length : 0;
+
+  return (
+    <div className="app">
+      <Sidebar
+        fileTree={fileTree}
+        onFileSelect={openFile}
+        currentFile={currentFile}
+        onNewFile={handleNewFile}
+        onNewFolder={handleNewFolder}
+        onDelete={handleDelete}
+        onRename={handleRename}
+        collapsed={sidebarCollapsed}
+        onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
+      />
+      <main className="main-content">
+        <div className="toolbar">
+          <div className="toolbar-left">
+            {!sidebarCollapsed && (
+              <button className="collapse-btn" onClick={() => setSidebarCollapsed(true)} title="收起侧栏">☰</button>
+            )}
+            {sidebarCollapsed && (
+              <button className="collapse-btn" onClick={() => setSidebarCollapsed(false)} title="展开侧栏">☰</button>
+            )}
+            {currentFile && (
+              <span className="current-file-name">📄 {currentFile}</span>
+            )}
+          </div>
+          <div className="toolbar-right">
+            {(wordCount > 0 || charCount > 0) && (
+              <span className="status-counts">
+                {wordCount} 词 · {charCount} 字符 · {lineCount} 行
+              </span>
+            )}
+            <button
+              className={`autosave-btn ${autoSave ? 'on' : 'off'}`}
+              onClick={() => setAutoSave(!autoSave)}
+              title={autoSave ? '自动保存已开启 (Ctrl+S 手动保存)' : '自动保存已关闭'}
+            >
+              {autoSave ? '⏱ 自动' : '⏱ 手动'}
+            </button>
+            <div className="view-toggle">
+              <button className={viewMode === 'edit' ? 'active' : ''} onClick={() => setViewMode('edit')} title="编辑模式">
+                ✏️ 编辑
+              </button>
+              <button className={viewMode === 'split' ? 'active' : ''} onClick={() => setViewMode('split')} title="分屏模式">
+                📐 分屏
+              </button>
+              <button className={viewMode === 'preview' ? 'active' : ''} onClick={() => setViewMode('preview')} title="预览模式">
+                👁️ 预览
+              </button>
+            </div>
+            <button className="save-btn" onClick={saveFile} disabled={!currentFile || saving}>
+              {saving ? '保存中...' : saved ? '✓ 已保存' : '💾 保存'}
+            </button>
+          </div>
+        </div>
+
+        <Search
+          visible={searchOpen}
+          onClose={() => setSearchOpen(false)}
+          onSelect={openFile}
+        />
+
+        {currentFile ? (
+          <div className={`editor-area view-${viewMode}`}>
+            {(viewMode === 'edit' || viewMode === 'split') && (
+              <Editor content={content} onChange={(c) => { setContent(c); setSaved(false); }} />
+            )}
+            {(viewMode === 'preview' || viewMode === 'split') && (
+              <Preview content={content} />
+            )}
+          </div>
+        ) : (
+          <div className="empty-state">
+            <div className="empty-icon">📓</div>
+            <h2>Markdown Notebook</h2>
+            <p>选择左侧文件树中的笔记，或新建一个笔记开始写作</p>
+            <div className="shortcuts-hint">
+              <span>Ctrl+S 保存</span> · <span>Ctrl+F 搜索</span> · <span>Tab 缩进</span>
+            </div>
+            <button onClick={() => handleNewFile('untitled.md')}>
+              ✨ 新建笔记
+            </button>
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+
+export default App;
