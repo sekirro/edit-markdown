@@ -29,7 +29,9 @@ A local-first Markdown notebook project with file tree management, split editing
 npm install
 ```
 
-### 2. Start the backend
+### 2. Start in development mode
+
+Start the backend first:
 
 ```bash
 npm run server
@@ -37,15 +39,21 @@ npm run server
 
 The backend listens on `http://localhost:3001` by default.
 
-### 3. Start the frontend dev server
+Then start the frontend dev server in another terminal:
 
 ```bash
 npm run dev
 ```
 
-The frontend runs on `http://localhost:5173` by default and accesses `/api` through the Vite proxy.
+The frontend dev server runs on `http://127.0.0.1:5173` and accesses `/api` through the Vite proxy.
 
-### 4. Production build
+Use this URL during development:
+
+```text
+http://127.0.0.1:5173
+```
+
+### 3. Run the built app
 
 ```bash
 npm run build
@@ -53,6 +61,12 @@ npm start
 ```
 
 After building, `server.js` serves the frontend assets from `dist/`.
+
+Open the built app at:
+
+```text
+http://localhost:3001
+```
 
 ## Project Structure
 
@@ -69,6 +83,23 @@ After building, `server.js` serves the frontend assets from `dist/`.
 ```
 
 ## Usage
+
+### Current workflow
+
+Recommended day-to-day workflow:
+
+1. Run `npm install`
+2. In terminal A, run `npm run server`
+3. In terminal B, run `npm run dev`
+4. Open `http://127.0.0.1:5173` in the browser
+5. Edit notes in the UI; files are saved into the `notes/` directory
+
+### URL behavior
+
+- `http://127.0.0.1:5173`: frontend development environment with hot reload; use this during normal development
+- `http://localhost:3001`: local backend service for file APIs; if `dist/` already exists, it also serves the built frontend page
+- If you change code in `src/` without running `npm run build` again, the page on `3001` may still be the old built version
+- Use `5173` for source-code development and `3001` for checking the built result
 
 ### Notes and folders
 
@@ -111,6 +142,7 @@ After building, `server.js` serves the frontend assets from `dist/`.
 - All notes are stored in the `notes/` directory by default
 - The backend reads and writes directly to the local filesystem
 - The current UI is primarily designed for Markdown and plain text files
+- When moving the project to another computer, copy the full project folder and run `npm install` again there
 
 ## License
 
